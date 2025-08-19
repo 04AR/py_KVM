@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Remote KVM Control</title>
+    <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.development.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.development.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.22.5/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+
+<body>
+    <div id="root"></div>
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        function App() {
+            const [logs, setLogs] = useState([]);
+            const [showClientEvents, setShowClientEvents] = useState(false);
+            const [textInput, setTextInput] = useState('');
+            const controlAreaRef = useRef(null);
+            const wsRef = useRef(null);
+
+            useEffect(() => {
+                wsRef.current = new WebSocket('ws://' + window.location.host + '/ws');
+                const ws = wsRef.current;
+
+                ws.onmessage = (event) => {
+                    const data = JSON.parse(event.data);
+                    if (data.type === 'server_key') {
+                        setLogs(prev => [...prev, {
+                            type: 'Server Key',
+                            action: data.action,
+                            key: data.key,
+                            text: '',
+                            timestamp: new Date().toLocaleTimeString()
+                        }]);
+                    } else if (data.type === 'server_text') {
+                        setLogs(prev => [...prev, {
+                            type: 'Server Text',
+                            action: 'sent',
+                            key: '',
+                            text: data.text,
+                            timestamp: new Date().toLocaleTimeString()
+                        }]);
+                    } else if (data.type === 'client_key') {
+                        setLogs(prev => [...prev, {
+                            type: 'Client Key',
+                            action: data.action,
+                            key: data.key,
+                            text: '',
+                            timestamp: new Date().toLocaleTimeString()
+                        }]);
+                    } else if (data.type === 'client_text') {
+                        setLogs(prev => [...prev, {
+                            type: 'Client Text',
+                            action: 'sent',
+                            key: '',
+                            text: data.text,
+                            timestamp: new Date().toLocaleTimeString()
+                        }]);
+                    }
+                };
+
+                ws.onclose = () => console.log('WebSocket closed');
+                return () => ws.close();
+            }, []);
+
+            const sendEvent = (eventData) => {
+                if (wsRef.current.readyState === WebSocket.OPEN) {
+                    wsRef.current.send(JSON.stringify(eventData));
+                    if (showClientEvents && eventData.type !== 'client_text' && eventData.type !== 'key') {
+                        setLogs(prev => [...prev, {
+                            type: eventData.type === 'key' ? 'Client Key' : 'Client Mouse',
+                            action: eventData.action || 'sent',
+                            key: eventData.key || eventData.button || '',
+                            text: eventData.text || '',
+                            timestamp: new Date().toLocaleTimeString()
+                        }]);
+                    }
+                }
+            };
+
+            const handleTextSubmit = (e) => {
+                if (e.key === 'Enter' && !e.shiftKey && textInput.trim()) {
+                    sendEvent({ type: 'client_text', text: textInput.trim() });
+                    setTextInput(''); // Clear text area
+                    e.preventDefault();
+                }
+            };
+
+            const handleMouseMove = (e) => {
+                const rect = controlAreaRef.current.getBoundingClientRect();
+                const x = (e.clientX - rect.left) / rect.width;
+                const y = (e.clientY - rect.top) / rect.height;
+                sendEvent({ type: 'mouse', action: 'move', x, y });
+            };
+
+            const handleMouseDown = (e) => {
+                sendEvent({ type: 'mouse', action: 'down', button: e.button });
+                e.preventDefault();
+            };
+
+            const handleMouseUp = (e) => {
+                sendEvent({ type: 'mouse', action: 'up', button: e.button });
+                e.preventDefault();
+            };
+
+            const handleWheel = (e) => {
+                sendEvent({ type: 'mouse', action: 'wheel', delta: -e.deltaY });
+                e.preventDefault();
+            };
+
+            const handleKeyDown = (e) => {
+                sendEvent({ type: 'key', action: 'down', key: e.key });
+                e.preventDefault();
+            };
+
+            const handleKeyUp = (e) => {
+                sendEvent({ type: 'key', action: 'up', key: e.key });
+                e.preventDefault();
+            };
+
+            return (
+                <div className="h-screen flex flex-col">
+                    <div
+                        ref={controlAreaRef}
+                        className="flex-1 bg-black text-white text-center flex items-center justify-center"
+                        onMouseMove={handleMouseMove}
+                        onMouseDown={handleMouseDown}
+                        onMouseUp={handleMouseUp}
+                        onWheel={handleWheel}
+                        onKeyDown={handleKeyDown}
+                        onKeyUp={handleKeyUp}
+                        tabIndex={0}
+                    >
+                        <span>Click here to start controlling. Use keyboard and mouse.</span>
+                    </div>
+                    <div className="bg-gray-800 text-white p-4">
+                        <div className="mb-4 flex items-center space-x-4">
+                            <label className="inline-flex items-center">
+                                <input
+                                    type="checkbox"
+                                    checked={showClientEvents}
+                                    onChange={() => setShowClientEvents(!showClientEvents)}
+                                    className="mr-2"
+                                />
+                                Show Local Client Events
+                            </label>
+                            <div className="flex-1">
+                                <textarea
+                                    value={textInput}
+                                    onChange={(e) => setTextInput(e.target.value)}
+                                    onKeyDown={handleTextSubmit}
+                                    placeholder="Enter text to send to server (press Enter to send)"
+                                    className="w-full p-2 bg-gray-700 text-white border border-gray-600 rounded"
+                                    rows="2"
+                                />
+                            </div>
+                        </div>
+                        <div className="h-64 overflow-auto">
+                            <table className="w-full text-left border-collapse">
+                                <thead>
+                                    <tr className="bg-gray-700">
+                                        <th className="p-2">Type</th>
+                                        <th className="p-2">Action</th>
+                                        <th className="p-2">Key</th>
+                                        <th className="p-2">Text</th>
+                                        <th className="p-2">Timestamp</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {logs.map((log, index) => (
+                                        <tr key={index} className="border-t border-gray-600">
+                                            <td className="p-2">{log.type}</td>
+                                            <td className="p-2">{log.action}</td>
+                                            <td className="p-2">{log.key}</td>
+                                            <td className="p-2">{log.text}</td>
+                                            <td className="p-2">{log.timestamp}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+
+</html>
